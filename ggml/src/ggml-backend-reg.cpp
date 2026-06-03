@@ -38,6 +38,10 @@
 #include "ggml-metal.h"
 #endif
 
+#ifdef GGML_USE_SECDA
+#include "ggml-secda.h"
+#endif
+
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
 #endif
@@ -557,6 +561,14 @@ void ggml_backend_load_all() {
 }
 
 void ggml_backend_load_all_from_path(const char * dir_path) {
+#ifndef GGML_BACKEND_DL
+    // When not built with GGML_BACKEND_DL, backends are already statically
+    // registered at compile time - skip dynamic loading to avoid spurious
+    // errors when scanning shared libs that lack ggml_backend_init.
+    GGML_UNUSED(dir_path);
+    return;
+#endif
+
 #ifdef NDEBUG
     bool silent = true;
 #else
