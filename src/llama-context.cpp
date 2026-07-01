@@ -1313,6 +1313,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    // Jude: Added to create graph plan for SECDA
+#ifdef GGML_USE_SECDA
+            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+                 ggml_backend_t backend = backend_ptrs[i];
+                 const char * name = ggml_backend_name(backend);
+                if (strcmp(name, "SECDA") == 0) {
+                    LLAMA_LOG_INFO("%s: found secda backend\n", __func__);
+                    ggml_backend_graph_plan_create(backend, gf);
+                }
+            }
+#endif
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
