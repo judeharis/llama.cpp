@@ -360,6 +360,8 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    // Jude: Added
+    bool                             power;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -404,6 +406,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
+    /* Jude: Added power    */ false
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -464,6 +467,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("                                              (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                (default: 0)\n");
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
+    printf("  -power, --power <0|1>                       (default: %s)\n", cmd_params_defaults.power ? "1" : "0"); // Jude: Added
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -516,6 +520,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.power               = cmd_params_defaults.power; // Jude: Added
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -1010,6 +1015,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 for (const auto & v : p) {
                     params.fit_params_min_ctx.push_back(std::stoul(v));
                 }
+            } else if (arg == "-power" || arg == "--power") { // Jude: Added
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.power = std::stoi(argv[i]);
             } else {
                 invalid_param = true;
                 break;
@@ -2236,6 +2247,7 @@ int llama_bench(int argc, char ** argv) {
         }
         auto mparams = inst.to_llama_mparams();
         auto cparams = inst.to_llama_cparams();
+        cparams.no_perf = false; // Jude: Added to get performance metrics
 
         bool do_fit = inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
                       inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
@@ -2350,6 +2362,11 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        // Jude: Added
+        // Start power measurement here
+        // if (params.power) {
+        //     fprintf(stderr, "llama-bench: benchmark %d/%zu: START POWER\n", params_idx, params_count);
+        // }
         for (int i = 0; i < params.reps; i++) {
             llama_memory_clear(llama_get_memory(ctx), false);
 

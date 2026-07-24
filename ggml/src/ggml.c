@@ -1781,6 +1781,11 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
+        // Jude: added for profiling
+        /*.perf_runs    =*/ 0,
+        /*.perf_cycles  =*/ 0,
+        /*.perf_time_us =*/ 0,
+        /*.isSECDA      =*/ 0,
         /*.padding      =*/ { 0 },
     };
 
@@ -7325,32 +7330,54 @@ struct ggml_tensor * ggml_graph_get_grad_acc(const struct ggml_cgraph * cgraph, 
     return igrad != GGML_HASHSET_FULL && ggml_bitset_get(cgraph->visited_hash_set.used, igrad) && cgraph->grad_accs ? cgraph->grad_accs[igrad] : NULL;
 }
 
+// Jude: added for profiling
+static int graph_count = 0;
 void ggml_graph_print(const struct ggml_cgraph * cgraph) {
-    GGML_LOG_INFO("=== GRAPH ===\n");
 
-    GGML_LOG_INFO("n_nodes = %d\n", cgraph->n_nodes);
+    double mm_total = 0.0;
+    double total = 0.0;
+
+    FILE * fp = NULL;
+    if (graph_count == 0) {
+        fp = ggml_fopen("_gstats/graph_stats.csv", "w");
+        if (fp == NULL) {
+            GGML_LOG_ERROR("Failed to open graph_stats.csv for writing\n");
+            return;
+        }
+        fprintf(fp, "Graph,Index,M,N,K,Backend,Op,Src0Type,Src1Type,PerfRuns,PerfCycles,PerfCyclesPerRun,PerfTimeUs,PerfTimeUsPerRun\n");
+    } else {
+        fp = ggml_fopen("_gstats/graph_stats.csv", "a");
+        if (fp == NULL) {
+            GGML_LOG_ERROR("Failed to open graph_stats.csv for appending\n");
+            return;
+        }
+    }
+    
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
-
-        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %s\n",
-                i,
-                node->ne[0], node->ne[1], node->ne[2],
-                ggml_op_name(node->op), (node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" :
-                      ggml_graph_get_grad(cgraph, node) ? "g" : " ");
-    }
-
-    GGML_LOG_INFO("n_leafs = %d\n", cgraph->n_leafs);
-    for (int i = 0; i < cgraph->n_leafs; i++) {
-        struct ggml_tensor * node = cgraph->leafs[i];
-
-        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 "] %8s %16s\n",
-                i,
-                node->ne[0], node->ne[1],
+        const int64_t M = node->ne[0];
+        const int64_t N = node->ne[1];
+        const int64_t K = node->src[0]->ne[0];
+        bool isSECDA = node->isSECDA == 1 ? true : false;
+        fprintf(fp, "%d,%d,%" PRId64 ",%" PRId64 ",%" PRId64 ",%s,%s,%s,%s,%d,%" PRIu64 ",%.3f,%.3f,%.3f\n",
+                graph_count, i,
+                M, N, K,
+                (isSECDA) ? "SECDA" : "CPU",
                 ggml_op_name(node->op),
-                ggml_get_name(node));
-    }
+                ggml_type_name(node->src[0]->type),
+                node->src[1] ? ggml_type_name(node->src[1]->type) :"NONE",
+                node->perf_runs,
+                node->perf_cycles,
+                (double) node->perf_cycles  / (double) node->perf_runs,
+                (double) node->perf_time_us,
+                (double) node->perf_time_us / node->perf_runs);
 
-    GGML_LOG_INFO("========================================\n");
+        if (node->op == GGML_OP_MUL_MAT)
+            mm_total += (double) node->perf_time_us / 1000.0 / node->perf_runs;
+        total += (double) node->perf_time_us / 1000.0/ node->perf_runs;
+    }
+    fclose(fp);
+    graph_count++;
 }
 
 static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,

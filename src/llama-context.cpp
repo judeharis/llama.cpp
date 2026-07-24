@@ -17,6 +17,9 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+// Jude: Added
+#include <iostream>
+#include <fstream>
 
 //
 // llama_context
@@ -1331,6 +1334,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = status;
         return nullptr;
     }
+
+    // Jude: Added for profiling
+#ifdef GGML_PERF
+        ggml_graph_print(gf);
+#endif
 
     ret = GGML_STATUS_SUCCESS;
 
@@ -3977,6 +3985,16 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
+    // Jude: Added
+    // Save the performance data to csv file
+    std::ofstream perf_file("llama_perf.csv");
+    perf_file << "load time, prompt eval time, prompt tokens, prompt ms per token,";
+    perf_file << " prompt tokens per second, eval time, eval tokens,";
+    perf_file << " eval ms per token, eval tokens per second, total time, total tokens" << std::endl;
+    perf_file << data.t_load_ms << "," << data.t_p_eval_ms << "," << data.n_p_eval << "," << data.t_p_eval_ms / data.n_p_eval << ",";
+    perf_file << 1e3 / data.t_p_eval_ms * data.n_p_eval << "," << data.t_eval_ms << "," << data.n_eval << ",";
+    perf_file << data.t_eval_ms / data.n_eval << "," << 1e3 / data.t_eval_ms * data.n_eval << "," << (t_end_ms - data.t_start_ms) << "," << (data.n_p_eval + data.n_eval) << std::endl;
+    perf_file.close();
 }
 
 void llama_perf_context_reset(llama_context * ctx) {

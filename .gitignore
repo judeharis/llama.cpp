@@ -164,3 +164,8 @@ AGENTS.local.md
 
 # SECDA
 .vscode
+results/
+tbo.csv
+llama_perf.csv
+prf.csv
+_gstats/
