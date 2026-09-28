@@ -629,8 +629,6 @@ int llama_cli(int argc, char ** argv) {
         });
         console::log("\n");
 
-        // Jude: Added 
-        llama_perf_context_print(ctx_cli.ctx_server.get_llama_context()); // Jude: Added
         if (params.show_timings) {
             console::set_display(DISPLAY_TYPE_INFO);
             console::log("\n");
