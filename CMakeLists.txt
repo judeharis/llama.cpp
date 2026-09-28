@@ -84,15 +84,6 @@ else()
     set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
 endif()
 
-# Jude: added for profiling
-# if (GGML_PERF AND SECDA_PERF)
-if (GGML_PERF)
-    # message(STATUS "Enabling GGML_PERF for performance profiling")
-    # add_compile_definitions(GGML_PERF)
-else()
-    message(STATUS "Disabling GGML_PERF for performance profiling")
-endif()
-
 #
 # option list
 #

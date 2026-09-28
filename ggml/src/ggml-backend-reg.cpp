@@ -38,9 +38,11 @@
 #include "ggml-metal.h"
 #endif
 
+// Jude: Added - SECDA backend header (include dir exported by the ggml-secda target)
 #ifdef GGML_USE_SECDA
 #include "ggml-secda.h"
 #endif
+// Jude: Added end
 
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
@@ -123,9 +125,11 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_METAL
         register_backend(ggml_backend_metal_reg());
 #endif
-#ifdef GGML_USE_SECDA // Jude
+// Jude: Added - register the SECDA backend
+#ifdef GGML_USE_SECDA
         register_backend(ggml_backend_secda_reg());
 #endif
+// Jude: Added end
 #ifdef GGML_USE_SYCL
         register_backend(ggml_backend_sycl_reg());
 #endif
@@ -564,14 +568,6 @@ void ggml_backend_load_all() {
 }
 
 void ggml_backend_load_all_from_path(const char * dir_path) {
-#ifndef GGML_BACKEND_DL
-    // When not built with GGML_BACKEND_DL, backends are already statically
-    // registered at compile time - skip dynamic loading to avoid spurious
-    // errors when scanning shared libs that lack ggml_backend_init.
-    GGML_UNUSED(dir_path);
-    return;
-#endif
-
 #ifdef NDEBUG
     bool silent = true;
 #else
@@ -585,7 +581,6 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("hip", silent, dir_path);
     ggml_backend_load_best("metal", silent, dir_path);
     ggml_backend_load_best("rpc", silent, dir_path);
-    ggml_backend_load_best("secda", silent, dir_path); // Jude
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
     ggml_backend_load_best("virtgpu", silent, dir_path);

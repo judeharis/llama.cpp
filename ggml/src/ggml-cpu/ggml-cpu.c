@@ -76,9 +76,6 @@
 #define UNUSED GGML_UNUSED
 #define SWAP(x, y, T) do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
 
-// Jude: Edited
-int file_counter = 0;
-
 // precomputed f32 table for f16 (256 KB) (simd-mappings.h)
 float ggml_table_f32_f16[1 << 16];
 
@@ -478,10 +475,6 @@ struct ggml_threadpool {
     struct ggml_cgraph * cgraph;
     struct ggml_cplan  * cplan;
 
-    // Jude: added for profiling
-    int64_t perf_node_start_cycles;
-    int64_t perf_node_start_time_us;
-
     // synchronization primitives
     atomic_int n_graph;       // updated when there is work to be done (i.e each graph) holds graph and active thread counts.
     atomic_int GGML_CACHE_ALIGN n_barrier;
@@ -512,15 +505,6 @@ struct ggml_compute_state {
     struct ggml_threadpool * threadpool;
     int ith;
 };
-
-// Jude: added for profiling
-static void ggml_graph_compute_perf_stats_node(struct ggml_tensor * node, const struct ggml_threadpool * st) {
-    int64_t cycles_cur  = ggml_cycles()  - st->perf_node_start_cycles;
-    int64_t time_us_cur = ggml_time_us() - st->perf_node_start_time_us;
-    node->perf_runs++;
-    node->perf_cycles  += cycles_cur;
-    node->perf_time_us += time_us_cur;
-}
 
 // Helpers for polling loops
 #if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
@@ -1456,33 +1440,6 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
-    // Jude: Added
-    // int M = ne01;
-    // int K = ne00;
-    // int N = ne11;
-    // printf("ggml_compute_forward_mul_mat: M = %d, K = %d, N = %d\n", M, K, N);
-    // char * type = ggml_type_name(src0->type);
-    // if (ith == 0 && type!= NULL && strcmp(type, "f32") != 0) {
-    //     char base_name[512];
-    //     char file_counter_chars[16];
-    //     snprintf(file_counter_chars, sizeof(file_counter_chars), "%d", file_counter++);
-    //     snprintf(base_name, sizeof(base_name), "%s_%s", file_counter_chars, type != '\0' ? type : "dst");
-    //     char csv_name[512];
-    //     snprintf(csv_name, sizeof(csv_name), "results/%s_cpu2.csv", base_name);
-
-    //     FILE * fp = fopen(csv_name, "w");
-    //     if (fp != NULL) {
-    //         for (int r = 0; r < M; ++r) {
-    //             for (int c = 0; c < N; ++c) {
-    //                 const float v = *(const float *)((const char *) dst->data + c * nb1 + r * nb0);
-    //                 fprintf(fp, c + 1 < N ? "%f," : "%f", v);
-    //             }
-    //             fputc('\n', fp);
-    //         }
-    //         fclose(fp);
-    //     }
-    // }
-
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -3084,15 +3041,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
-        // Jude: Added for profiling
-#ifdef GGML_PERF
-        if (state->ith == 0) {
-            state->threadpool->perf_node_start_cycles  = ggml_cycles();
-            state->threadpool->perf_node_start_time_us = ggml_time_us();
-        }
-#endif
-
-
         if (ggml_op_is_empty(node->op)) {
             // skip NOPs
             continue;
@@ -3116,12 +3064,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);
             tp->ec    = GGML_STATUS_ABORTED;
         }
-
-        // Jude: Added for profiling
-#ifdef GGML_PERF
-        if (state->ith == 0) 
-            ggml_graph_compute_perf_stats_node(node, state->threadpool);
-#endif
 
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);

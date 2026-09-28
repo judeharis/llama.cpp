@@ -694,11 +694,6 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-        // Jude: added profiling
-        int     perf_runs;
-        int64_t perf_cycles;
-        int64_t perf_time_us;
-        int32_t isSECDA;
         char padding[8];
     };
 

@@ -21,9 +21,6 @@
 #define GROUP_MAX_EPS_IQ1_S 1e-12f
 
 #define UNUSED GGML_UNUSED
-// Jude: Edited
-// #undef __AVX2__
-// #undef __AVX__
 
 // some compilers don't provide _mm256_set_m128i, e.g. gcc 7
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
