@@ -15,6 +15,12 @@
 #include "ggml.h"
 #include "common.h"
 
+// Jude: Added for profiling
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/time.h>
+
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
 #elif !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
@@ -78,6 +84,8 @@
 
 // Jude: Edited
 int file_counter = 0;
+double vec_dot_time = 0;
+double store_time = 0;
 
 // precomputed f32 table for f16 (256 KB) (simd-mappings.h)
 float ggml_table_f32_f16[1 << 16];
@@ -520,6 +528,10 @@ static void ggml_graph_compute_perf_stats_node(struct ggml_tensor * node, const 
     node->perf_runs++;
     node->perf_cycles  += cycles_cur;
     node->perf_time_us += time_us_cur;
+    node->perf_compute_us += vec_dot_time * 1e6;
+    node->perf_store_us += store_time * 1e6;
+    vec_dot_time = 0;
+    store_time = 0;
 }
 
 // Helpers for polling loops
@@ -1245,14 +1257,33 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                 //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
                 //}
+                // Jude: Added for profiling
+                struct timespec start, stop;
+                double accum;
 
+                clock_gettime( CLOCK_REALTIME, &start);
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
+                clock_gettime( CLOCK_REALTIME, &stop);
+
+
+                accum = ( stop.tv_sec - start.tv_sec )
+                        + (double)( stop.tv_nsec - start.tv_nsec )
+                        / (double)1000000000L;
+                vec_dot_time += accum;
+
+
+                clock_gettime( CLOCK_REALTIME, &start);
 
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
                     memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
                 }
+                clock_gettime( CLOCK_REALTIME, &stop);
+                accum = ( stop.tv_sec - start.tv_sec )
+                        + (double)( stop.tv_nsec - start.tv_nsec )
+                        / (double)1000000000L;
+                store_time += accum;
             }
         }
     }

@@ -7344,7 +7344,7 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
             GGML_LOG_ERROR("Failed to open graph_stats.csv for writing\n");
             return;
         }
-        fprintf(fp, "Graph,Index,M,N,K,Backend,Op,Src0Type,Src1Type,PerfRuns,PerfCycles,PerfCyclesPerRun,PerfTimeUs,PerfTimeUsPerRun\n");
+        fprintf(fp, "Graph,Index,M,N,K,Backend,Op,Src0Type,Src1Type,PerfRuns,PerfCycles,PerfCyclesPerRun,PerfTimeUs,PerfTimeUsPerRun,PerfComputeUs,PerfStoreUs\n");
     } else {
         fp = ggml_fopen("_gstats/graph_stats.csv", "a");
         if (fp == NULL) {
@@ -7359,7 +7359,7 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
         const int64_t N = node->ne[1];
         const int64_t K = node->src[0]->ne[0];
         bool isSECDA = node->isSECDA == 1 ? true : false;
-        fprintf(fp, "%d,%d,%" PRId64 ",%" PRId64 ",%" PRId64 ",%s,%s,%s,%s,%d,%" PRIu64 ",%.3f,%.3f,%.3f\n",
+        fprintf(fp, "%d,%d,%" PRId64 ",%" PRId64 ",%" PRId64 ",%s,%s,%s,%s,%d,%" PRIu64 ",%.3f,%.3f,%.3f,%.3f,%.3f\n",
                 graph_count, i,
                 M, N, K,
                 (isSECDA) ? "SECDA" : "CPU",
@@ -7370,7 +7370,10 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
                 node->perf_cycles,
                 (double) node->perf_cycles  / (double) node->perf_runs,
                 (double) node->perf_time_us,
-                (double) node->perf_time_us / node->perf_runs);
+                (double) node->perf_time_us / node->perf_runs,
+                (double) node->perf_compute_us / node->perf_runs,
+                (double) node->perf_store_us / node->perf_runs
+            );
 
         if (node->op == GGML_OP_MUL_MAT)
             mm_total += (double) node->perf_time_us / 1000.0 / node->perf_runs;

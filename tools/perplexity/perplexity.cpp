@@ -4,10 +4,16 @@
 #include "log.h"
 #include "llama.h"
 
+// Jude: Added for llama_model::get_tensor (SECDA accel-call estimate)
+#ifdef GGML_USE_SECDA
+#include "../../src/llama-model.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -441,6 +447,100 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     return {tokens, std::exp(nll / count), logit_history, prob_history};
 }
 
+#ifdef GGML_USE_SECDA
+// Jude: Added to estimate how many MUL_MAT calls per decode will be
+// dispatched to the SECDA accelerator, by probing the real backend support
+// decision (not a reimplementation of it) against each layer's weight tensors.
+static void print_secda_accel_estimate(const llama_context * ctx, int64_t total_decode_calls) {
+    ggml_backend_dev_t secda_dev = nullptr;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (strcmp(ggml_backend_dev_name(dev), "SECDA") == 0) {
+            secda_dev = dev;
+            break;
+        }
+    }
+    if (!secda_dev) {
+        return;
+    }
+
+    const llama_model * model    = llama_get_model(ctx);
+    const int32_t       n_layer  = llama_model_n_layer(model);
+    const int64_t       n_ubatch = llama_n_ubatch(ctx);
+
+    static const char * per_layer_names[] = {
+        "attn_q", "attn_k", "attn_v", "attn_output", "attn_qkv",
+        "ffn_gate", "ffn_up", "ffn_down",
+    };
+
+    std::vector<const ggml_tensor *> candidates;
+    for (int32_t il = 0; il < n_layer; ++il) {
+        for (const char * base : per_layer_names) {
+            std::string name = string_format("blk.%d.%s.weight", il, base);
+            if (const ggml_tensor * t = model->get_tensor(name.c_str())) {
+                candidates.push_back(t);
+            }
+        }
+    }
+    for (const char * name : {"output.weight", "token_embd.weight"}) {
+        if (const ggml_tensor * t = model->get_tensor(name)) {
+            candidates.push_back(t);
+            break; // only the one actually used as the output projection
+        }
+    }
+
+    int supported = 0;
+    for (const ggml_tensor * weight : candidates) {
+        if (weight->ne[2] != 1 || weight->ne[3] != 1) {
+            continue; // not a plain 2D matmul weight (e.g. MoE experts)
+        }
+
+        ggml_init_params params = {
+            /*.mem_size   =*/ ggml_tensor_overhead()*4,
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr tmp_ctx { ggml_init(params) };
+
+        ggml_tensor * w   = ggml_dup_tensor(tmp_ctx.get(), weight);
+        ggml_tensor * act = ggml_new_tensor_2d(tmp_ctx.get(), GGML_TYPE_F32, weight->ne[0], n_ubatch);
+        ggml_tensor * op  = ggml_mul_mat(tmp_ctx.get(), w, act);
+
+        // Jude: exact same dummy-buffer pattern as buft_supported() in
+        // src/llama-model.cpp - supports_op() implementations expect
+        // src[i]->buffer to be non-null.
+        ggml_backend_buffer_type_t secda_buft = ggml_backend_dev_buffer_type(secda_dev);
+        ggml_backend_buffer_ptr buf { ggml_backend_buft_alloc_buffer(secda_buft, 0) };
+        w->buffer   = buf.get();
+        act->buffer = buf.get();
+
+        if (ggml_backend_dev_supports_op(secda_dev, op)) {
+            ++supported;
+        }
+    }
+
+    const int64_t total = (int64_t) supported * total_decode_calls;
+    LOG_INF("%s: SECDA accelerator will handle %d/%zu matmuls per decode call "
+            "(%.1f%%) -> ~%" PRId64 " estimated accelerator calls total (ubatch=%" PRId64 ")\n",
+            __func__, supported, candidates.size(),
+            candidates.empty() ? 0.0 : 100.0 * supported / candidates.size(),
+            total, n_ubatch);
+}
+#endif // GGML_USE_SECDA
+
+// Jude: Added to format seconds as "%d hours %.2f minutes" / "%.2f minutes",
+// shared by the upfront ETA and the per-chunk progress line below.
+static std::string format_duration(float seconds) {
+    int total_seconds = (int) seconds;
+    std::string out;
+    if (total_seconds >= 60*60) {
+        out += string_format("%d hours ", total_seconds / (60*60));
+        total_seconds %= 60*60;
+    }
+    out += string_format("%.2f minutes", total_seconds / 60.0);
+    return out;
+}
+
 static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
     if (params.ppl_stride > 0) {
         return perplexity_v2(ctx, params);
@@ -516,6 +616,16 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
 
     LOG_INF("%s: calculating perplexity over %d chunks, n_ctx=%d, batch_size=%d, n_seq=%d\n", __func__, n_chunk, n_ctx, n_batch, n_seq);
 
+    // Jude: Added to precalculate how many llama_decode() calls this run will
+    // make, and (on SECDA builds) how many will hit the accelerator, before
+    // any of them actually happen.
+    const int64_t total_decode_calls = (int64_t)((n_chunk + n_seq - 1) / n_seq) * num_batches;
+    LOG_INF("%s: will perform %" PRId64 " model execution (llama_decode) calls across %d chunks\n",
+            __func__, total_decode_calls, n_chunk);
+#ifdef GGML_USE_SECDA
+    print_secda_accel_estimate(ctx, total_decode_calls);
+#endif
+
     std::vector<std::thread> workers(std::thread::hardware_concurrency() - 1);
 
     std::vector<uint16_t> log_probs;
@@ -541,13 +651,15 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     // process the entire prompt.
     const int first = n_ctx/2;
 
+    // Jude: Added for continuous progress reporting
+    const auto  t_loop_start      = std::chrono::high_resolution_clock::now();
+    int64_t     decode_calls_done = 0;
+
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
 
         const int n_seq_batch = std::min(n_seq, n_chunk - i);
-
-        const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
@@ -595,20 +707,20 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
                 const auto * batch_logits = llama_get_logits(ctx);
                 logits.insert(logits.end(), batch_logits, batch_logits + size_t(n_outputs) * n_vocab);
             }
-        }
 
-
-        if (i == 0) {
-            llama_synchronize(ctx);
-            const auto t_end = std::chrono::high_resolution_clock::now();
-            const float t_total = std::chrono::duration<float>(t_end - t_start).count();
-            LOG_INF("%s: %.2f seconds per pass - ETA ", __func__, t_total);
-            int total_seconds = (int)(t_total*n_chunk/n_seq);
-            if (total_seconds >= 60*60) {
-                LOG("%d hours ", total_seconds / (60*60));
-                total_seconds = total_seconds % (60*60);
+            // Jude: Added to report continuous progress every batch (every
+            // llama_decode() call) instead of once per chunk-group.
+            {
+                llama_synchronize(ctx);
+                ++decode_calls_done;
+                const auto  t_now   = std::chrono::high_resolution_clock::now();
+                const float elapsed = std::chrono::duration<float>(t_now - t_loop_start).count();
+                const float eta     = elapsed / decode_calls_done * (total_decode_calls - decode_calls_done);
+                LOG_INF("%s: progress: %" PRId64 "/%" PRId64 " batches (%.1f%%) - elapsed %s - ETA %s remaining\n",
+                        __func__, decode_calls_done, total_decode_calls,
+                        100.0*decode_calls_done/total_decode_calls,
+                        format_duration(elapsed).c_str(), format_duration(eta).c_str());
             }
-            LOG("%.2f minutes\n", total_seconds / 60.0);
         }
 
         for (int seq = 0; seq < n_seq_batch; seq++) {

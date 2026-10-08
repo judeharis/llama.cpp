@@ -698,6 +698,8 @@ extern "C" {
         int     perf_runs;
         int64_t perf_cycles;
         int64_t perf_time_us;
+        int64_t perf_compute_us;
+        int64_t perf_store_us;
         int32_t isSECDA;
         char padding[8];
     };
